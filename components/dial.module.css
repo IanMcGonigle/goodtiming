@@ -1,0 +1,65 @@
+.artwork {
+  position: relative;
+  width: min(100%, 32rem);
+  aspect-ratio: 1;
+  margin-inline: auto;
+  display: grid;
+  place-items: center;
+}
+.orbit {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+}
+.orbit::after {
+  content: '';
+  position: absolute;
+  width: 0.65rem;
+  height: 0.65rem;
+  background: var(--accent);
+  border-radius: 50%;
+  left: 14%;
+  top: 14%;
+}
+.dial {
+  width: 88%;
+  overflow: visible;
+  transform: rotate(-12deg);
+}
+.numeral {
+  fill: currentColor;
+  font-family: Georgia, serif;
+  font-size: 27px;
+}
+.signature {
+  fill: currentColor;
+  font-size: 9px;
+  letter-spacing: 2px;
+  font-weight: 700;
+}
+.secondHand {
+  transform-origin: 200px 200px;
+  transform: rotate(125deg);
+  animation: sweep 60s linear infinite;
+}
+.annotation {
+  position: absolute;
+  bottom: -2.7rem;
+  font-family: Georgia, serif;
+  font-size: 1.1rem;
+  font-style: italic;
+}
+@keyframes sweep {
+  from {
+    transform: rotate(125deg);
+  }
+  to {
+    transform: rotate(485deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .secondHand {
+    animation: none;
+  }
+}
