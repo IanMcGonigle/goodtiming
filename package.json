@@ -9,7 +9,9 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "ebay:check": "node --conditions=react-server --import tsx scripts/check-ebay.ts",
+    "test": "node --conditions=react-server --import tsx --test lib/server/ebay/*.test.ts"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -17,7 +19,8 @@
   "dependencies": {
     "next": "^16.3.8",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@types/node": "^22",
@@ -27,6 +30,7 @@
     "eslint-config-next": "^16.3.8",
     "eslint-config-prettier": "^10",
     "prettier": "^3",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }
