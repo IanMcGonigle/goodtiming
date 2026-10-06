@@ -83,7 +83,7 @@ OAuth still uses the client credentials grant and `https://api.ebay.com/oauth/ap
 
 `searchEbayItems` preserves the small normalized projection: total, item ID, title, optional price/currency. Search options now also support `maxPrice` (USD/CAD) and an explicit buying format. Server-only `searchEbayResponse` and `getEbayItemDetails` return unknown raw data for diagnostics; callers must validate it, and it never forms a browser or domain model. There is no implemented `WatchListing` model yet, only `types/README.md` planning notes. No schema expansion was made without real Production observations.
 
-`server-only` enforces Next.js browser boundaries. `tsx` is development tooling for executing TypeScript scripts/tests; commands enable the `react-server` condition so the same guarded modules can run outside Next.js. No public API route or homepage UI was added.
+`server-only` enforces Next.js browser boundaries. `tsx` is development tooling for executing TypeScript scripts/tests; commands enable the `react-server` condition so the same guarded modules can run outside Next.js. Browse remains CLI/server-only, with no public search endpoint or homepage UI. The account-deletion notification route described below is the only public eBay API route.
 
 References: [eBay OAuth/client credentials](https://developer.ebay.com/develop/guides/sell/authorization) and [Browse API](https://developer.ebay.com/api-docs/buy/static/api-browse.html).
 
@@ -108,3 +108,33 @@ Documentation-based expectations, **not observed Production findings**:
 The eventual persistence model should start with source/environment/marketplace and item ID, title, decimal money and currency, normal URL, primary image, condition, seller feedback snapshot, buying options, optional shipping/location, and discovery/last-checked timestamps. Add auction state/end time only for an auction feature. Enrich a reduced candidate set with detail aspects, additional images, returns, and authenticity flags once verified. Keep absent fields nullable/optional and preserve provenance; never promote seller assertions to verified brand/model/authenticity. Workflow/publication fields remain separate from the eBay adapter.
 
 References: [Browse overview](https://developer.ebay.com/api-docs/buy/api-browse.html), [price/buying filters](https://developer.ebay.com/api-docs/buy/static/ref-buy-browse-filters.html). These support investigation planning, not claims about responses that were not obtained.
+
+## Marketplace Account Deletion notification endpoint
+
+Route: `GET` and `POST /api/ebay/marketplace-account-deletion`, using the Node.js runtime on Netlify. No custom Netlify configuration or new dependency is required. The homepage and Browse/OAuth code are unchanged. This route provides subscription verification and notification receipt only; it does not establish that deletion processing or full compliance has been implemented.
+
+Configure these **server-side runtime** variables in Netlify when you deploy this change (and optionally `.env.local` for local testing):
+
+```dotenv
+EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN=<your separately generated token>
+EBAY_MARKETPLACE_DELETION_ENDPOINT=https://goodtiming.ca/api/ebay/marketplace-account-deletion
+```
+
+Generate the token separately: 32–80 characters, exclusively ASCII letters, numbers, `_`, or `-`. Do not use a `NEXT_PUBLIC_` prefix, commit the token, or include it in commands/screenshots/logs. Both settings are validated lazily, independent of eBay OAuth credentials. Invalid configuration returns a generic HTTP 503; the homepage/build still work without these variables. The configured endpoint must match the exact canonical URL above, without trailing slash, query string, or whitespace. It is never inferred from request headers.
+
+Manual subscription steps after deploying the route yourself:
+
+1. Set both runtime variables and deploy/redeploy so the server can read them.
+2. In the eBay Developer portal, open the Production keyset's Marketplace Account Deletion notification settings. Subscribe rather than claiming an exemption, enter the exact HTTPS URL above, the same verification token, and the required contact email.
+3. Save the settings and let eBay run the GET challenge. Confirm portal verification and use its test-notification facility to check POST delivery.
+4. Verify the Production keyset activation status, then rerun the basic OAuth/Browse check separately. No activation or deployment was performed by this implementation.
+
+GET requires a single nonempty `challenge_code` query parameter. It returns HTTP 200 JSON with `challengeResponse`, the lowercase SHA-256 of the UTF-8 concatenation **challengeCode + verificationToken + configuredEndpointURL**. Missing, blank, or repeated challenges return 400. Responses are not cached.
+
+POST requires `application/json` (charset parameters supported) and a body at most 64 KiB, enforced on actual streamed bytes. The envelope must include `metadata.topic=MARKETPLACE_ACCOUNT_DELETION`, a nonempty notification ID, valid event/publish timestamps, an integer publish-attempt count of at least one, and a data object with at least one nonempty string identifier among `userId`, `username`, or `eiasToken`. No individual identifier is mandatory. Wrong media type returns 415; malformed JSON/envelope returns 400; oversized bodies return 413. Valid receipt returns **204 No Content**, including repeated notifications. No payload/identifier/token is logged, stored, or returned.
+
+**Receipt is not processing:** payload-shape validation does not verify eBay's signature. No signature lookup, persistence, queue, durable receipt, or account/user-data deletion exists in this milestone. Acknowledged bodies are discarded. This is appropriate only while Good Timing retains no eBay user data. Before storing marketplace data, implement notification authenticity verification, durable/retryable deletion handling, and identifier matching using immutable `userId` where available; usernames can change or be omitted. Do not treat the GET verification token as POST sender authentication or a username as an immutable identifier.
+
+Tests use synthetic configuration/payloads only. `npm test` covers exact hash order/UTF-8, request-header independence, token alphabet/length, URL exactness, invalid/missing configuration, partial identifiers, retries, malformed JSON/envelopes, content types, and body-size limits.
+
+Source: [eBay Marketplace Account Deletion guidance](https://developer.ebay.com/develop/guides/sell/marketplace-user-account-deletion).
