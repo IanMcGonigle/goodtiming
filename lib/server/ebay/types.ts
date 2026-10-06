@@ -14,4 +14,6 @@ export interface EbaySearchOptions {
   query: string;
   limit?: number;
   marketplace?: 'EBAY_US' | 'EBAY_CA';
+  maxPrice?: { value: number; currency: 'USD' | 'CAD' };
+  buyingFormat?: 'FIXED_PRICE' | 'AUCTION';
 }

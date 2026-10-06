@@ -15,10 +15,13 @@ export function getEbayConfig(): EbayConfig {
   if (environment !== 'sandbox' && environment !== 'production') {
     throw new EbayError('EBAY_ENVIRONMENT must be sandbox or production.');
   }
-  const clientId = process.env.EBAY_CLIENT_ID?.trim();
-  const clientSecret = process.env.EBAY_CLIENT_SECRET?.trim();
+  const prefix = environment === 'sandbox' ? 'EBAY_SANDBOX' : 'EBAY_PRODUCTION';
+  const clientId = process.env[`${prefix}_CLIENT_ID`]?.trim();
+  const clientSecret = process.env[`${prefix}_CLIENT_SECRET`]?.trim();
   if (!clientId || !clientSecret) {
-    throw new EbayError('EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are required.');
+    throw new EbayError(
+      `${prefix}_CLIENT_ID and ${prefix}_CLIENT_SECRET are required for ${environment}.`,
+    );
   }
   return {
     environment,

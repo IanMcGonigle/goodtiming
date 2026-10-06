@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { getApplicationToken, invalidateApplicationToken } from './auth';
-import { searchEbayItems } from './client';
+import { searchEbayItems, getEbayItemDetails } from './client';
+import {
+  cleanItemUrl,
+  fieldCoverage,
+  listingSummary,
+} from '../../../scripts/ebay-diagnostics';
 import { getEbayConfig } from './config';
 import { EbayError } from './errors';
 import { normalizeSearchResult } from './normalize';
@@ -10,8 +15,10 @@ const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
 const keys = [
   'EBAY_ENVIRONMENT',
-  'EBAY_CLIENT_ID',
-  'EBAY_CLIENT_SECRET',
+  'EBAY_SANDBOX_CLIENT_ID',
+  'EBAY_SANDBOX_CLIENT_SECRET',
+  'EBAY_PRODUCTION_CLIENT_ID',
+  'EBAY_PRODUCTION_CLIENT_SECRET',
 ] as const;
 const originalEnv = Object.fromEntries(
   keys.map((key) => [key, process.env[key]]),
@@ -34,8 +41,10 @@ const results = {
 
 beforeEach(() => {
   process.env.EBAY_ENVIRONMENT = 'sandbox';
-  process.env.EBAY_CLIENT_ID = `test-client-${++sequence}`;
-  process.env.EBAY_CLIENT_SECRET = 'test-secret';
+  process.env.EBAY_SANDBOX_CLIENT_ID = `test-client-${++sequence}`;
+  process.env.EBAY_SANDBOX_CLIENT_SECRET = 'test-secret';
+  process.env.EBAY_PRODUCTION_CLIENT_ID = `production-client-${sequence}`;
+  process.env.EBAY_PRODUCTION_CLIENT_SECRET = 'production-secret';
 });
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -60,7 +69,7 @@ test('OAuth uses Sandbox Basic credentials and the Browse scope; concurrent call
     const headers = new Headers(init?.headers);
     assert.equal(
       headers.get('Authorization'),
-      `Basic ${Buffer.from(`${process.env.EBAY_CLIENT_ID}:test-secret`).toString('base64')}`,
+      `Basic ${Buffer.from(`${process.env.EBAY_SANDBOX_CLIENT_ID}:test-secret`).toString('base64')}`,
     );
     assert.equal(
       headers.get('Content-Type'),
@@ -104,7 +113,7 @@ test('environment and credential changes cannot reuse an old token', async () =>
   await getApplicationToken();
   process.env.EBAY_ENVIRONMENT = 'production';
   assert.equal(await getApplicationToken(), 'token-2');
-  process.env.EBAY_CLIENT_SECRET = 'rotated-test-secret';
+  process.env.EBAY_PRODUCTION_CLIENT_SECRET = 'rotated-test-secret';
   assert.equal(await getApplicationToken(), 'token-3');
   assert.deepEqual(urls, [
     'https://api.sandbox.ebay.com/identity/v1/oauth2/token',
@@ -229,8 +238,11 @@ test('configuration and search input fail before network access', async () => {
     assert.throws(getEbayConfig, /EBAY_ENVIRONMENT/);
   }
   process.env.EBAY_ENVIRONMENT = 'sandbox';
-  delete process.env.EBAY_CLIENT_SECRET;
-  assert.throws(getEbayConfig, /EBAY_CLIENT_ID and EBAY_CLIENT_SECRET/);
+  delete process.env.EBAY_SANDBOX_CLIENT_SECRET;
+  assert.throws(
+    getEbayConfig,
+    /EBAY_SANDBOX_CLIENT_ID and EBAY_SANDBOX_CLIENT_SECRET/,
+  );
   for (const options of [
     { query: '' },
     { query: ' '.repeat(3) },
@@ -262,4 +274,123 @@ test('normalization accepts empty Sandbox results and rejects malformed items', 
   ]) {
     assert.throws(() => normalizeSearchResult(body), EbayError);
   }
+});
+
+test('selected credentials never fall back to another environment', () => {
+  process.env.EBAY_ENVIRONMENT = 'production';
+  delete process.env.EBAY_PRODUCTION_CLIENT_SECRET;
+  assert.throws(
+    getEbayConfig,
+    /EBAY_PRODUCTION_CLIENT_ID and EBAY_PRODUCTION_CLIENT_SECRET/,
+  );
+  process.env.EBAY_ENVIRONMENT = 'sandbox';
+  delete process.env.EBAY_SANDBOX_CLIENT_ID;
+  assert.throws(
+    getEbayConfig,
+    /EBAY_SANDBOX_CLIENT_ID and EBAY_SANDBOX_CLIENT_SECRET/,
+  );
+});
+
+test('Production OAuth uses its own keyset and switching back cannot reuse a Production token', async () => {
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    calls++;
+    const production = process.env.EBAY_ENVIRONMENT === 'production';
+    const credentials = production
+      ? `${process.env.EBAY_PRODUCTION_CLIENT_ID}:production-secret`
+      : `${process.env.EBAY_SANDBOX_CLIENT_ID}:test-secret`;
+    assert.equal(
+      new Headers(init?.headers).get('Authorization'),
+      `Basic ${Buffer.from(credentials).toString('base64')}`,
+    );
+    assert.equal(
+      String(url),
+      production
+        ? 'https://api.ebay.com/identity/v1/oauth2/token'
+        : 'https://api.sandbox.ebay.com/identity/v1/oauth2/token',
+    );
+    return token(`token-${calls}`);
+  };
+  process.env.EBAY_ENVIRONMENT = 'production';
+  assert.equal(await getApplicationToken(), 'token-1');
+  process.env.EBAY_ENVIRONMENT = 'sandbox';
+  assert.equal(await getApplicationToken(), 'token-2');
+  process.env.EBAY_ENVIRONMENT = 'production';
+  assert.equal(await getApplicationToken(), 'token-3');
+});
+
+test('price filter includes currency and optional buying format; invalid prices fail before HTTP', async () => {
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/oauth2/')) return token();
+    assert.equal(
+      new URL(String(url)).searchParams.get('filter'),
+      'price:[..499.99],priceCurrency:USD,buyingOptions:{FIXED_PRICE}',
+    );
+    return json(results);
+  };
+  await searchEbayItems({
+    query: 'watch',
+    maxPrice: { value: 499.99, currency: 'USD' },
+    buyingFormat: 'FIXED_PRICE',
+  });
+  globalThis.fetch = async () => {
+    assert.fail('must not call network');
+  };
+  for (const value of [0, -1, NaN, Infinity]) {
+    await assert.rejects(
+      searchEbayItems({ query: 'watch', maxPrice: { value, currency: 'USD' } }),
+      /Maximum price/,
+    );
+  }
+});
+
+test('item details use the same authenticated adapter and encode the Browse ID', async () => {
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/oauth2/')) return token();
+    assert.equal(
+      new URL(String(url)).pathname,
+      '/buy/browse/v1/item/v1%7C123%7C0',
+    );
+    assert.equal(
+      new Headers(init?.headers).get('Authorization'),
+      'Bearer test-token',
+    );
+    return json(results.itemSummaries[0]);
+  };
+  assert.deepEqual(
+    await getEbayItemDetails('v1|123|0'),
+    results.itemSummaries[0],
+  );
+  await assert.rejects(
+    getEbayItemDetails('../bad-id'),
+    /Invalid Browse item ID/,
+  );
+});
+
+test('diagnostics whitelist listing data, remove URL tracking, and count zero-valued fields', () => {
+  assert.equal(
+    cleanItemUrl('https://www.ebay.com/itm/123?affiliate=example#fragment'),
+    'https://www.ebay.com/itm/123',
+  );
+  assert.equal(cleanItemUrl('https://evil.example/itm/123'), undefined);
+  const summary = listingSummary({
+    ...results.itemSummaries[0],
+    access_token: 'hidden',
+    clientSecret: 'hidden',
+    seller: { username: 'test', feedbackScore: 0 },
+    returnTerms: { returnsAccepted: false },
+  });
+  assert.ok(!JSON.stringify(summary).includes('hidden'));
+  const coverage = fieldCoverage([
+    {
+      bidCount: 0,
+      seller: { feedbackScore: 0 },
+      additionalImages: [],
+      shippingOptions: [{ shippingCost: { value: '0.00', currency: 'USD' } }],
+    },
+  ]);
+  assert.equal(coverage.bidCount, 1);
+  assert.equal(coverage['seller.feedbackScore'], 1);
+  assert.equal(coverage.additionalImages, 0);
+  assert.equal(coverage['shippingOptions.shippingCost'], 1);
 });
